@@ -6256,7 +6256,68 @@ window.GF = {
 
 console.log('🎮 Game Forge v7.0.0 загружен. API: window.GF');
 
-  
+
+   /* ============================================================
+   ДОПОЛНИТЕЛЬНЫЕ ФИКСЫ (найдены при финальной проверке)
+   ============================================================ */
+
+/* --- ФИКС A: чат-инпут отправляет сообщение 3 раза --- */
+/* Причина: keydown привязан в части 1, части 5 и Editor2D._bindTopButtons.
+   Каждый addEventListener добавляет ещё один обработчик.
+   Решение: клонируем элемент (удаляет ВСЕ слушатели) и ставим один. */
+(function fixChatInputStacking() {
+  const old = document.getElementById('chatInput');
+  if (!old) return;
+  const clone = old.cloneNode(true);
+  clone.value = old.value;
+  old.parentNode.replaceChild(clone, old);
+  clone.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const text = clone.value.trim();
+      if (!text) return;
+      clone.value = '';
+      if (window.AIv3 && typeof AIv3.handleUserMessage === 'function') {
+        AIv3.handleUserMessage(text);
+      } else {
+        console.warn('AIv3 не готов');
+      }
+    }
+  });
+})();
+
+/* --- ФИКС B: кнопка ➤ может вызывать заглушку из части 1 --- */
+(function fixChatSendButton() {
+  const btn = document.getElementById('chatSend');
+  if (!btn) return;
+  btn.onclick = () => {
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    if (window.AIv3 && typeof AIv3.handleUserMessage === 'function') {
+      AIv3.handleUserMessage(text);
+    } else {
+      console.warn('AIv3 не готов');
+    }
+  };
+})();
+
+/* --- ФИКС C: показываем пользователю, что всё ОК --- */
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const chat = document.getElementById('chat');
+    if (chat) {
+      const ok = document.createElement('div');
+      ok.className = 'msg sys';
+      ok.style.cssText = 'background:#052e16;color:#86efac';
+      ok.textContent = '✅ Game Forge v7 загружен. Проверь консоль (F12) — не должно быть красных ошибок.';
+      chat.appendChild(ok);
+    }
+  }, 800);
+});
+    </script>
 </body>
 </html>
 
