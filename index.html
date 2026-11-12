@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Sprout: A Gardener's Journey</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #1a2a1a;
+    font-family: 'Georgia', serif;
+    color: #f4e9d0;
+  }
+  #game-container {
+    position: relative;
+    width: 100vw; height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, #2d4a2d 0%, #0f1a0f 100%);
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    -ms-interpolation-mode: nearest-neighbor;
+    background: #87CEEB;
+    box-shadow: 0 0 40px rgba(136, 192, 87, 0.35), inset 0 0 100px rgba(0,0,0,0.25);
+    border-radius: 8px;
+    filter: contrast(1.05) saturate(1.12) brightness(1.03);
+  }
+  /* Виньетка поверх canvas */
+  #vignette {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    box-shadow: inset 0 0 180px rgba(0,0,0,0.55);
+    border-radius: 8px;
+  }
+  #ui {
+    position: absolute; top: 12px; left: 12px; right: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .panel {
+    background: rgba(20, 35, 20, 0.75);
+    border: 2px solid rgba(136, 192, 87, 0.5);
+    border-radius: 10px;
+    padding: 8px 14px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  #hint {
+    position: absolute; bottom: 16px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 35, 20, 0.8);
+    border: 2px solid rgba(136, 192, 87, 0.5);
+    border-radius: 10px;
+    padding: 8px 18px;
+    font-size: 14px;
+    text-align: center;
+    z-index: 10;
+    transition: opacity 0.4s ease;
+  }
+  #rotate-warning {
+    display: none;
+    position: absolute; inset: 0;
+    background: rgba(10, 20, 10, 0.95);
+    color: #f4e9d0;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    font-size: 20px; text-align: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  #rotate-warning .icon {
+    font-size: 60px; margin-bottom: 20px;
+    animation: rotateHint 2s ease-in-out infinite;
+  }
+  @keyframes rotateHint {
+    0%, 100% { transform: rotate(0deg); }
+    50% { transform: rotate(90deg); }
+  }
+  @media (orientation: portrait) and (max-width: 900px) {
+    #rotate-warning { display: flex; }
+  }
+  .btn {
+    pointer-events: auto;
+    cursor: pointer;
+    background: rgba(136, 192, 87, 0.25);
+    border: 1px solid rgba(136, 192, 87, 0.6);
+    color: #f4e9d0;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .btn:hover { background: rgba(136, 192, 87, 0.45); transform: translateY(-1px); }
+  .btn:active { transform: translateY(1px); }
+  #lang-btn { margin-left: 8px; }
+</style>
+</head>
+<body>
+<div id="game-container">
+  <canvas id="game"></canvas>
+  <div id="vignette"></div>
+  <div id="ui">
+    <div class="panel">
+      <span id="score-label">Цветов:</span> <span id="score">0</span>
+    </div>
+    <div class="panel">
+      <button class="btn" id="lang-btn">EN</button>
+    </div>
+  </div>
+  <div id="hint">← → движение &nbsp;•&nbsp; ПРОБЕЛ — посадить семечко &nbsp;•&nbsp; E — полить</div>
+  <div id="rotate-warning">
+    <div class="icon">📱↻</div>
+    <div id="rotate-text">Поверните телефон горизонтально, чтобы играть</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ====== КОНФИГ ======
+  const WORLD_W = 1280, WORLD_H = 720;
+  const GROUND_Y = 560;
+  const GRAVITY = 1400;
+
+  // ====== ЛОКАЛИЗАЦИЯ ======
+  const LANG = {
+    ru: {
+      score: 'Цветов:',
+      hint: '← → движение  •  ПРОБЕЛ — посадить семечко  •  E — полить',
+      rotate: 'Поверните телефон горизонтально, чтобы играть',
+      langBtn: 'EN'
+    },
+    en: {
+      score: 'Flowers:',
+      hint: '← → move  •  SPACE — plant seed  •  E — water',
+      rotate: 'Rotate your phone horizontally to play',
+      langBtn: 'RU'
+    }
+  };
+  let currentLang = 'ru';
+
+  function applyLang() {
+    const t = LANG[currentLang];
+    document.getElementById('score-label').textContent = t.score;
+    document.getElementById('hint').textContent = t.hint;
+    document.getElementById('rotate-text').textContent = t.rotate;
+    document.getElementById('lang-btn').textContent = t.langBtn;
+  }
+  document.getElementById('lang-btn').addEventListener('click', () => {
+    currentLang = currentLang === 'ru' ? 'en' : 'ru';
+    applyLang();
+  });
+
+  // ====== CANVAS ======
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false; // pixel-perfect, никаких артефактов
+
+  function resize() {
+    const ratio = WORLD_W / WORLD_H;
+    let w = window.innerWidth, h = window.innerHeight;
+    if (w / h > ratio) w = h * ratio; else h = w / ratio;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.width = WORLD_W;
+    canvas.height = WORLD_H;
+    ctx.imageSmoothingEnabled = false;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ====== ВВОД ======
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'Space') e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+  // Тач-управление для мобильных
+  let touchDir = 0, touchAction = null;
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    for (const t of e.touches) {
+      const rect = canvas.getBoundingClientRect();
+      const x = (t.clientX - rect.left) / rect.width;
+      const y = (t.clientY - rect.top) / rect.height;
+      if (y > 0.75) {
+        if (x < 0.33) touchDir = -1;
+        else if (x > 0.66) touchDir = 1;
+        else touchAction = 'water';
+      } else {
+        touchAction = 'plant';
+      }
+    }
+  }, {passive: false});
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    touchDir = 0; touchAction = null;
+  }, {passive: false});
+
+  // ====== УТИЛИТЫ ======
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const randi = (a, b) => Math.floor(rand(a, b));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // ====== ЧАСТИЦЫ ======
+  class Particle {
+    constructor(x, y, opts = {}) {
+      this.x = x; this.y = y;
+      this.vx = opts.vx ?? rand(-40, 40);
+      this.vy = opts.vy ?? rand(-120, -40);
+      this.gravity = opts.gravity ?? 200;
+      this.life = opts.life ?? 1;
+      this.maxLife = this.life;
+      this.size = opts.size ?? rand(2, 4);
+      this.color = opts.color ?? '#FFE082';
+      this.shape = opts.shape ?? 'circle'; // circle | leaf | drop
+      this.rot = rand(0, Math.PI * 2);
+      this.vr = rand(-3, 3);
+    }
+    update(dt) {
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+      this.vy += this.gravity * dt;
+      this.rot += this.vr * dt;
+      this.life -= dt;
+    }
+    draw(ctx) {
+      const a = clamp(this.life / this.maxLife, 0, 1);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = this.color;
+      if (this.shape === 'circle') {
+        ctx.beginPath();
+        ctx.arc(Math.floor(this.x), Math.floor(this.y), this.size, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (this.shape === 'leaf') {
+        ctx.save();
+        ctx.translate(Math.floor(this.x), Math.floor(this.y));
+        ctx.rotate(this.rot);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, this.size * 2, this.size, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      } else if (this.shape === 'drop') {
+        ctx.beginPath();
+        ctx.arc(Math.floor(this.x), Math.floor(this.y), this.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+  const particles = [];
+  function emit(x, y, count, opts) {
+    for (let i = 0; i < count; i++) particles.push(new Particle(x, y, opts));
+  }
+
+  // ====== РАСТЕНИЯ ======
+  class Plant {
+    constructor(x) {
+      this.x = x;
+      this.y = GROUND_Y;
+      this.growth = 0;       // 0..1
+      this.stage = 0;        // 0-семя, 1-росток, 2-стебель, 3-бутон, 4-цветок
+      this.water = 0;        // 0..1
+      this.age = 0;
+      this.hue = randi(0, 360);
+      this.petalCount = randi(5, 8);
+      this.swayPhase = rand(0, Math.PI * 2);
+      this.scaleY = 1;
+      this.scaleX = 1;
+      this.born = performance.now();
+    }
+    update(dt) {
+      this.age += dt;
+      // Рост зависит от воды
+      if (this.water > 0.1 && this.growth < 1) {
+        this.growth = Math.min(1, this.growth + dt * 0.18 * (0.4 + this.water));
+        this.water = Math.max(0, this.water - dt * 0.15);
+      }
+      const newStage = this.growth < 0.05 ? 0 :
+                       this.growth < 0.25 ? 1 :
+                       this.growth < 0.55 ? 2 :
+                       this.growth < 0.85 ? 3 : 4;
+      if (newStage !== this.stage) {
+        this.stage = newStage;
+        // Squash & stretch при смене стадии
+        this.scaleY = 1.25; this.scaleX = 0.8;
+        // Частицы при цветении
+        if (this.stage === 4) {
+          emit(this.x, this.y - 40, 14, {
+            vx: rand(-80, 80), vy: rand(-160, -60),
+            color: `hsl(${this.hue}, 80%, 70%)`,
+            size: rand(2, 4), life: rand(0.8, 1.4), gravity: 120, shape: 'leaf'
+          });
+          score++;
+          document.getElementById('score').textContent = score;
+        }
+      }
+      // Плавное возвращение масштаба (easing)
+      this.scaleY = lerp(this.scaleY, 1, 0.12);
+      this.scaleX = lerp(this.scaleX, 1, 0.12);
+      // Покачивание на ветру
+      this.swayPhase += dt * 1.5;
+    }
+    draw(ctx) {
+      const sway = Math.sin(this.swayPhase) * 2 * this.growth;
+      ctx.save();
+      ctx.translate(Math.floor(this.x), Math.floor(this.y));
+      ctx.scale(this.scaleX, this.scaleY);
+
+      if (this.stage === 0) {
+        // Семечко
+        ctx.fillStyle = '#6B4423';
+        ctx.beginPath();
+        ctx.ellipse(0, -2, 4, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (this.stage === 1) {
+        // Росток
+        ctx.strokeStyle = '#4A7C2A';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(sway, -15, sway * 0.5, -25 * this.growth * 4);
+        ctx.stroke();
+        // Листик
+        ctx.fillStyle = '#6BA832';
+        ctx.beginPath();
+        ctx.ellipse(sway * 0.5 + 4, -20 * this.growth * 4, 5, 3, 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (this.stage === 2) {
+        // Стебель с листьями
+        const h = 60 * (this.growth - 0.25) / 0.3 + 25;
+        ctx.strokeStyle = '#3E6B22';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(sway * 1.5, -h * 0.5, sway, -h);
+        ctx.stroke();
+        // Листья
+        ctx.fillStyle = '#5E9A2A';
+        for (let i = 1; i <= 3; i++) {
+          const ly = -h * (i / 4);
+          const side = i % 2 === 0 ? 1 : -1;
+          ctx.save();
+          ctx.translate(sway * (1 - i / 4), ly);
+          ctx.rotate(side * 0.4);
+          ctx.beginPath();
+          ctx.ellipse(side * 10, 0, 10, 5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      } else if (this.stage >= 3) {
+        // Стебель
+        const h = 90;
+        ctx.strokeStyle = '#3E6B22';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(sway * 1.5, -h * 0.5, sway, -h);
+        ctx.stroke();
+        // Листья
+        ctx.fillStyle = '#5E9A2A';
+        for (let i = 1; i <= 3; i++) {
+          const ly = -h * (i / 4);
+          const side = i % 2 === 0 ? 1 : -1;
+          ctx.save();
+          ctx.translate(sway * (1 - i / 4), ly);
+          ctx.rotate(side * 0.4);
+          ctx.beginPath();
+          ctx.ellipse(side * 10, 0, 10, 5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        // Цветок
+        if (this.stage === 4) {
+          const fx = sway, fy = -h;
+          const petalR = 9;
+          const petalColor = `hsl(${this.hue}, 75%, 65%)`;
+          const petalDark = `hsl(${this.hue}, 75%, 50%)`;
+          // Лепестки
+          ctx.fillStyle = petalColor;
+          for (let i = 0; i < this.petalCount; i++) {
+            const a = (i / this.petalCount) * Math.PI * 2 + this.age * 0.3;
+            ctx.save();
+            ctx.translate(fx, fy);
+            ctx.rotate(a);
+            ctx.beginPath();
+            ctx.ellipse(petalR, 0, petalR, petalR * 0.6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+          // Центр
+          ctx.fillStyle = petalDark;
+          ctx.beginPath();
+          ctx.arc(fx, fy, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#FFD54F';
+          ctx.beginPath();
+          ctx.arc(fx, fy, 3, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // Бутон
+          const fx = sway, fy = -90;
+          ctx.fillStyle = `hsl(${this.hue}, 60%, 55%)`;
+          ctx.beginPath();
+          ctx.arc(fx, fy, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Индикатор воды
+      if (this.water > 0.05 && this.growth < 1) {
+        ctx.fillStyle = 'rgba(100, 180, 255, 0.6)';
+        ctx.fillRect(-12, 8, 24 * this.water, 3);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  // ====== ИГРОК ======
+  class Player {
+    constructor() {
+      this.x = WORLD_W / 2;
+      this.y = GROUND_Y;
+      this.vx = 0;
+      this.vy = 0;
+      this.onGround = true;
+      this.facing = 1; // 1 = вправо, -1 = влево
+      this.walkTime = 0;
+      this.idleTime = 0;
+      this.scaleX = 1;
+      this.scaleY = 1;
+      this.speed = 220;
+      this.state = 'idle'; // idle, walk, plant, water
+      this.actionTime = 0;
+    }
+    update(dt) {
+      let inputX = 0;
+      if (keys['ArrowLeft'] || keys['KeyA']) inputX -= 1;
+      if (keys['ArrowRight'] || keys['KeyD']) inputX += 1;
+      if (touchDir !== 0) inputX = touchDir;
+
+      // Плавное ускорение (easing)
+      const targetVx = inputX * this.speed;
+      this.vx = lerp(this.vx, targetVx, 0.18);
+
+      if (Math.abs(this.vx) > 5) {
+        this.facing = this.vx > 0 ? 1 : -1;
+        this.state = 'walk';
+        this.walkTime += dt * Math.abs(this.vx) / 100;
+        this.idleTime = 0;
+      } else {
+        this.state = 'idle';
+        this.idleTime += dt;
+      }
+
+      this.x += this.vx * dt;
+      this.x = clamp(this.x, 40, WORLD_W - 40);
+
+      // Squash & stretch при ходьбе
+      if (this.state === 'walk') {
+        const step = Math.sin(this.walkTime * 6);
+        this.scaleY = 1 + step * 0.04;
+        this.scaleX = 1 - step * 0.03;
+        // Пыль из-под ног
+        if (Math.random() < 0.3) {
+          emit(this.x, this.y, 1, {
+            vx: -this.vx * 0.3 + rand(-20, 20),
+            vy: rand(-30, -10),
+            color: 'rgba(180, 150, 100, 0.7)',
+            size: rand(1.5, 3), life: 0.5, gravity: 80
+          });
+        }
+      } else {
+        // Дыхание в покое
+        const breath = Math.sin(this.idleTime * 2.5);
+        this.scaleY = 1 + breath * 0.02;
+        this.scaleX = 1 - breath * 0.01;
+      }
+
+      // Действия
+      this.actionTime = Math.max(0, this.actionTime - dt);
+      if ((keys['Space'] || touchAction === 'plant') && this.actionTime <= 0) {
+        this.plant();
+        this.actionTime = 0.4;
+        touchAction = null;
+      }
+      if ((keys['KeyE'] || touchAction === 'water') && this.actionTime <= 0) {
+        this.water();
+        this.actionTime = 0.3;
+        touchAction = null;
+      }
+    }
+    plant() {
+      this.state = 'plant';
+      this.scaleY = 0.85; this.scaleX = 1.15;
+      plants.push(new Plant(this.x + this.facing * 20));
+      emit(this.x + this.facing * 20, GROUND_Y - 5, 6, {
+        vx: rand(-30, 30), vy: rand(-60, -20),
+        color: '#8B5A2B', size: rand(1.5, 2.5), life: 0.6, gravity: 300
+      });
+    }
+    water() {
+      this.state = 'water';
+      this.scaleY = 0.9; this.scaleX = 1.1;
+      // Найти ближайшее растение в радиусе
+      let target = null, best = 100;
+      for (const p of plants) {
+        const d = Math.abs(p.x - this.x);
+        if (d < best) { best = d; target = p; }
+      }
+      if (target && best < 80) {
+        target.water = Math.min(1, target.water + 0.4);
+        emit(target.x, target.y - 40, 12, {
+          vx: rand(-40, 40), vy: rand(-20, 40),
+          color: '#7EC8FF', size: rand(2, 3), life: 0.7, gravity: 400, shape: 'drop'
+        });
+      } else {
+        // Просто брызги перед игроком
+        emit(this.x + this.facing * 25, this.y - 20, 8, {
+          vx: this.facing * rand(30, 80), vy: rand(-40, 20),
+          color: '#7EC8FF', size: rand(2, 3), life: 0.6, gravity: 400, shape: 'drop'
+        });
+      }
+    }
+    draw(ctx) {
+      ctx.save();
+      ctx.translate(Math.floor(this.x), Math.floor(this.y));
+      ctx.scale(this.facing * this.scaleX, this.scaleY);
+
+      // Тень
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(0, 2, 18, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Покачивание при ходьбе
+      const bob = this.state === 'walk' ? Math.sin(this.walkTime * 6) * 2 : 0;
+
+      // Ноги
+      ctx.fillStyle = '#5A3A1F';
+      const legSwing = this.state === 'walk' ? Math.sin(this.walkTime * 6) * 4 : 0;
+      ctx.fillRect(-8, -14 + bob, 6, 14);
+      ctx.fillRect(2, -14 + bob - legSwing * 0.3, 6, 14);
+
+      // Тело (садовый комбинезон)
+      ctx.fillStyle = '#4A7C2A';
+      ctx.fillRect(-11, -38 + bob, 22, 26);
+      // Лямки
+      ctx.fillStyle = '#3E6B22';
+      ctx.fillRect(-9, -38 + bob, 3, 8);
+      ctx.fillRect(6, -38 + bob, 3, 8);
+      // Карман
+      ctx.fillStyle = '#3E6B22';
+      ctx.fillRect(-5, -24 + bob, 10, 7);
+
+      // Руки
+      ctx.fillStyle = '#E8B890';
+      const armSwing = this.state === 'walk' ? Math.sin(this.walkTime * 6) * 6 : 0;
+      ctx.fillRect(-15, -36 + bob + armSwing, 5, 16);
+      ctx.fillRect(10, -36 + bob - armSwing, 5, 16);
+
+      // Голова
+      ctx.fillStyle = '#E8B890';
+      ctx.beginPath();
+      ctx.arc(0, -46 + bob, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Соломенная шляпа
+      ctx.fillStyle = '#D4A857';
+      ctx.fillRect(-14, -54 + bob, 28, 4);
+      ctx.fillStyle = '#C49647';
+      ctx.fillRect(-9, -62 + bob, 18, 9);
+      ctx.fillStyle = '#8B5A2B';
+      ctx.fillRect(-9, -56 + bob, 18, 2); // лента
+
+      // Глаза
+      ctx.fillStyle = '#2A1810';
+      ctx.fillRect(3, -48 + bob, 2, 2);
+      ctx.fillRect(-5, -48 + bob, 2, 2);
+      // Румянец
+      ctx.fillStyle = 'rgba(220, 120, 120, 0.4)';
+      ctx.fillRect(4, -44 + bob, 3, 2);
+      ctx.fillRect(-7, -44 + bob, 3, 2);
+
+      // Лейка в руке (если действие water)
+      if (this.state === 'water' || this.actionTime > 0.15) {
+        ctx.fillStyle = '#6B8E9E';
+        ctx.fillRect(12, -30 + bob, 10, 8);
+        ctx.fillRect(20, -32 + bob, 4, 4);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  // ====== ФОНОВЫЕ ОБЪЕКТЫ ======
+  const clouds = [];
+  for (let i = 0; i < 5; i++) {
+    clouds.push({
+      x: rand(0, WORLD_W), y: rand(40, 180),
+      w: rand(60, 120), speed: rand(6, 15)
+    });
+  }
+  const bgTrees = [];
+  for (let i = 0; i < 8; i++) {
+    bgTrees.push({
+      x: rand(0, WORLD_W), y: GROUND_Y - 20,
+      size: rand(0.7, 1.3), hue: randi(80, 130)
+    });
+  }
+  // Фоновые листья, летящие по ветру
+  const bgLeaves = [];
+  for (let i = 0; i < 12; i++) {
+    bgLeaves.push({
+      x: rand(0, WORLD_W), y: rand(0, WORLD_H * 0.7),
+      vx: rand(20, 60), vy: rand(10, 30),
+      rot: rand(0, Math.PI * 2), vr: rand(-1, 1),
+      size: rand(3, 6),
+      color: `hsl(${randi(60, 120)}, 60%, ${randi(40, 60)}%)`
+    });
+  }
+
+  // ====== СОСТОЯНИЕ ИГРЫ ======
+  const player = new Player();
+  const plants = [];
+  let score = 0;
+
+  // ====== ОТРИСОВКА ФОНА ======
+  function drawBackground(dt) {
+    // Небо с градиентом
+    const sky = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+    sky.addColorStop(0, '#A8D8F0');
+    sky.addColorStop(0.6, '#C8E8F5');
+    sky.addColorStop(1, '#F5E8C8');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, WORLD_W, GROUND_Y);
+
+    // Солнце
+    const sunGrad = ctx.createRadialGradient(WORLD_W - 120, 100, 20, WORLD_W - 120, 100, 80);
+    sunGrad.addColorStop(0, 'rgba(255, 240, 180, 1)');
+    sunGrad.addColorStop(0.4, 'rgba(255, 220, 140, 0.6)');
+    sunGrad.addColorStop(1, 'rgba(255, 220, 140, 0)');
+    ctx.fillStyle = sunGrad;
+    ctx.fillRect(WORLD_W - 220, 0, 220, 220);
+    ctx.fillStyle = '#FFF4C4';
+    ctx.beginPath();
+    ctx.arc(WORLD_W - 120, 100, 32, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Облака
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    for (const c of clouds) {
+      c.x += c.speed * dt;
+      if (c.x > WORLD_W + 100) c.x = -150;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.w * 0.3, 0, Math.PI * 2);
+      ctx.arc(c.x + c.w * 0.25, c.y - 8, c.w * 0.35, 0, Math.PI * 2);
+      ctx.arc(c.x + c.w * 0.55, c.y, c.w * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Дальние холмы
+    ctx.fillStyle = '#7FA868';
+    ctx.beginPath();
+    ctx.moveTo(0, GROUND_Y);
+    for (let x = 0; x <= WORLD_W; x += 40) {
+      const y = GROUND_Y - 40 - Math.sin(x * 0.008) * 20 - Math.cos(x * 0.015) * 15;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(WORLD_W, GROUND_Y);
+    ctx.fill();
+
+    // Фоновые деревья
+    for (const t of bgTrees) {
+      ctx.fillStyle = `hsl(${t.hue}, 40%, 35%)`;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y - 30 * t.size, 35 * t.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#4A3020';
+      ctx.fillRect(t.x - 4, t.y - 20, 8, 25);
+    }
+
+    // Земля
+    const ground = ctx.createLinearGradient(0, GROUND_Y, 0, WORLD_H);
+    ground.addColorStop(0, '#8B6F47');
+    ground.addColorStop(0.3, '#6B4F2F');
+    ground.addColorStop(1, '#3E2817');
+    ctx.fillStyle = ground;
+    ctx.fillRect(0, GROUND_Y, WORLD_W, WORLD_H - GROUND_Y);
+
+    // Трава поверх земли
+    ctx.fillStyle = '#5E9A2A';
+    ctx.fillRect(0, GROUND_Y - 4, WORLD_W, 6);
+    ctx.fillStyle = '#4A7C22';
+    for (let x = 0; x < WORLD_W; x += 8) {
+      const h = 3 + Math.sin(x * 0.3) * 2;
+      ctx.fillRect(x, GROUND_Y - 4 - h, 2, h);
+    }
+
+    // Летящие листья
+    for (const l of bgLeaves) {
+      l.x += l.vx * dt;
+      l.y += l.vy * dt;
+      l.rot += l.vr * dt;
+      if (l.x > WORLD_W + 20) { l.x = -20; l.y = rand(0, WORLD_H * 0.6); }
+      if (l.y > WORLD_H * 0.75) { l.y = rand(0, 100); l.x = rand(0, WORLD_W); }
+      ctx.save();
+      ctx.translate(Math.floor(l.x), Math.floor(l.y));
+      ctx.rotate(l.rot);
+      ctx.fillStyle = l.color;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, l.size, l.size * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // ====== ГЛАВНЫЙ ЦИКЛ ======
+  let lastTime = performance.now();
+  function loop(now) {
+    let dt = (now - lastTime) / 1000;
+    if (dt > 0.1) dt = 0.1; // защита от лагов
+    lastTime = now;
+
+    // Очистка (никаких артефактов-шлейфов)
+    ctx.clearRect(0, 0, WORLD_W, WORLD_H);
+
+    drawBackground(dt);
+
+    // Растения (сортируем по Y для правильного перекрытия)
+    for (const p of plants) p.update(dt);
+    plants.sort((a, b) => a.y - b.y);
+    for (const p of plants) p.draw(ctx);
+
+    // Игрок
+    player.update(dt);
+    player.draw(ctx);
+
+    // Частицы
+    for (let i = particles.length - 1; i >= 0; i--) {
+      particles[i].update(dt);
+      particles[i].draw(ctx);
+      if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  applyLang();
+})();
+</script>
+</body>
+</html>
